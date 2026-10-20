@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="ViChat.Client/ViChat.Client.csproj" />
+  <Project Path="ViChat.Server/ViChat.Server.csproj" />
+  <Project Path="ViChat.Shared/ViChat.Shared.csproj" />
+  <Project Path="ViChat.TestClient/ViChat.TestClient.csproj" />
+</Solution>
