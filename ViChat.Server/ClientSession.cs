@@ -1,6 +1,6 @@
 ﻿using System.Net.Sockets;
 using ViChat.Shared;
-
+using System.Collections.Concurrent;   // thêm ở đầu file
 public class ClientSession
 {
     // Khóa để đảm bảo mỗi lúc chỉ 1 luồng được ghi vào stream của client này
@@ -10,6 +10,13 @@ public class ClientSession
     public TcpClient Tcp { get; }
     public NetworkStream Stream { get; }
 
+    // ===== THÊM MỚI =====
+    // Tên người dùng. Tạm lấy từ TestClient; sau này thành viên 3 gán khi LOGIN thành công.
+    public string Username { get; set; } = "";
+
+    // Các phòng client này đang tham gia (key = tên phòng, value không dùng).
+    public ConcurrentDictionary<string, byte> Rooms { get; } = new();
+    // =====================
     public ClientSession(TcpClient tcp)
     {
         Tcp = tcp;
