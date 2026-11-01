@@ -5,9 +5,9 @@ using ViChat.Shared;
 Console.OutputEncoding = Encoding.UTF8;
 Console.InputEncoding = Encoding.UTF8;
 
-Console.Write("IP server (Enter = 127.0.0.1): ");
+Console.Write("IP server (Enter = 172.20.10.2): ");
 string? ip = Console.ReadLine();
-if (string.IsNullOrWhiteSpace(ip)) ip = "127.0.0.1";
+if (string.IsNullOrWhiteSpace(ip)) ip = "172.20.10.2";
 
 Console.Write("Tên của bạn: ");
 string name = Console.ReadLine() ?? "Ẩn danh";
