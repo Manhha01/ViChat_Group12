@@ -1,39 +1,45 @@
 ﻿using System.Windows;
-using ViChat.Shared;
+using System.Windows.Threading;
+using ViChat.Client.ViewModels;
 
 namespace ViChat.Client.Views;
 
 public partial class ChatWindow : Window
 {
+    private readonly ChatViewModel _vm;
+
     public ChatWindow()
     {
         InitializeComponent();
-        HelloText.Text = $"Xin chào, {App.Network.UserName}!";
 
-        App.Network.PacketReceived += OnPacket;
+        _vm = new ChatViewModel();
+        _vm.MessagesChanged += ScrollToBottom;
+        _vm.LogoutRequested += Logout;
+        DataContext = _vm;
+
         App.Network.Disconnected += OnDisconnected;
 
-        // Đóng cửa sổ thì HỦY đăng ký sự kiện, nếu không cửa sổ cũ vẫn "nghe" gói tin
+        // Đóng cửa sổ: dọn dẹp để cửa sổ cũ không còn "nghe" gói tin
         Closed += (_, _) =>
         {
-            App.Network.PacketReceived -= OnPacket;
+            _vm.Cleanup();
             App.Network.Disconnected -= OnDisconnected;
         };
+
+        Loaded += (_, _) => MessageBox.Focus(); // mở ra là gõ được ngay
     }
 
-    private void OnPacket(Packet p)
-    {
-        string data = string.Join(", ", p.Data.Select(kv => $"{kv.Key}={kv.Value}"));
-        LogList.Items.Add($"{p.Type}: {data}");
-    }
+    // Cuộn sau khi giao diện vẽ xong tin mới (ưu tiên Background = làm sau cùng)
+    private void ScrollToBottom() =>
+        Dispatcher.InvokeAsync(() => MessagesScroll.ScrollToEnd(), DispatcherPriority.Background);
 
     private void OnDisconnected(string reason)
     {
-        MessageBox.Show(reason, "ViChat", MessageBoxButton.OK, MessageBoxImage.Warning);
+        System.Windows.MessageBox.Show(reason, "ViChat", MessageBoxButton.OK, MessageBoxImage.Warning);
         BackToLogin();
     }
 
-    private void Logout_Click(object sender, RoutedEventArgs e)
+    private void Logout()
     {
         App.Network.Disconnect();
         BackToLogin();
