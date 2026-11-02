@@ -5,9 +5,9 @@ using ViChat.Shared;
 Console.OutputEncoding = Encoding.UTF8;
 Console.InputEncoding = Encoding.UTF8;
 
-Console.Write("IP server (Enter = 172.20.10.2): ");
+Console.Write("IP server (Enter = 192.168.1.211): ");
 string? ip = Console.ReadLine();
-if (string.IsNullOrWhiteSpace(ip)) ip = "172.20.10.2";
+if (string.IsNullOrWhiteSpace(ip)) ip = "192.168.1.211";
 
 Console.Write("Tên của bạn: ");
 string name = Console.ReadLine() ?? "Ẩn danh";
@@ -68,7 +68,7 @@ _ = Task.Run(async () =>
     }
 });
 
-// Gửi một gói; luôn kèm "from" để server biết tên (tạm thời, đến khi có LOGIN)
+// Gửi một gói; luôn kèm "from" để server biết tên (tạm thời, đến khi có LOGIN) 
 async Task Send(string type, Dictionary<string, string> data)
 {
     data["from"] = name;
