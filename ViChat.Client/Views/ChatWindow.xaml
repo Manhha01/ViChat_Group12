@@ -1,0 +1,14 @@
+﻿<Window x:Class="ViChat.Client.Views.ChatWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="ViChat" Width="1000" Height="680" WindowStartupLocation="CenterScreen"
+        FontFamily="{StaticResource AppFont}" Background="{StaticResource BackgroundBrush}">
+    <StackPanel Margin="32">
+        <TextBlock x:Name="HelloText" Style="{StaticResource HeadingText}"/>
+        <TextBlock Text="Màn chat chính sẽ làm ở bước 3. Tạm thời hiển thị các gói tin nhận được."
+                   Style="{StaticResource SubText}" Margin="0,6,0,16"/>
+        <ListBox x:Name="LogList" Height="380" BorderBrush="{StaticResource BorderBrush}"/>
+        <Button Content="Đăng xuất" Style="{StaticResource PrimaryButton}" Width="160"
+                HorizontalAlignment="Left" Margin="0,16,0,0" Click="Logout_Click"/>
+    </StackPanel>
+</Window>
