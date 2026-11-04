@@ -2,6 +2,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using ViChat.Server;
 using ViChat.Server.Data;
 using ViChat.Shared;
@@ -31,6 +32,13 @@ var loginLock = new object();
 
 // Quản lý các phòng chat (có sẵn phòng "General") – Khánh
 var rooms = new RoomManager();
+
+// Nạp lại các phòng đã lưu trong CSDL (để tắt server bật lại vẫn còn phòng)
+foreach (string roomName in ChatRepository.GetAllRoomNames())
+    rooms.Create(roomName, "system");   // General đã có sẵn thì Create trả null, không sao
+
+// Định dạng JSON cho gói HISTORY: tên trường kiểu camelCase (msgId, from, content, time)
+var historyJson = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 
 // Truyền file (FILE_START / FILE_CHUNK / FILE_END) – Thùy
 var fileRelay = FileRelay.CreateDefault("Uploads", clients);
@@ -110,6 +118,7 @@ async Task ProcessPacketAsync(ClientSession s, Packet p)
         case "LEAVE_ROOM": await HandleLeaveRoom(s, p); break;
         case "ROOM_LIST": await HandleRoomList(s); break;
         case PacketTypes.SendMsg: await HandleSendMsg(s, p); break;
+        case "GET_HISTORY": await HandleGetHistory(s, p); break;
 
         // --- Nhắn riêng 1-1, online, đang nhập, đã xem (Đạt) ---
         case "PRIVATE_MSG": await PrivateChat.HandlePrivateMsgAsync(s, p); break;
@@ -193,8 +202,9 @@ async Task HandleLogin(ClientSession s, Packet p)
         return;
     }
 
-    // 4) Vào phòng General và báo thành công
+    // 4) Vào phòng General (ghi cả vào CSDL) và báo thành công
     rooms.Join("General", s);
+    await ChatRepository.AddMemberAsync("General", user.Id);
     await s.SendAsync(new Packet
     {
         Type = "LOGIN_RESULT",
@@ -232,6 +242,7 @@ async Task HandleCreateRoom(ClientSession s, Packet p)
         return;
     }
 
+    await ChatRepository.SaveRoomAsync(name, s.UserId!.Value);   // lưu phòng, người tạo là quản trị phòng
     rooms.Join(name, s);   // người tạo tự vào phòng
     await s.SendAsync(new Packet { Type = "CREATE_ROOM", Data = new() { ["room"] = name, ["ok"] = "true" } });
 }
@@ -246,6 +257,7 @@ async Task HandleJoinRoom(ClientSession s, Packet p)
     }
 
     var room = rooms.Get(name)!;
+    await ChatRepository.AddMemberAsync(room.Name, s.UserId!.Value);
     await s.SendAsync(new Packet { Type = "JOIN_ROOM", Data = new() { ["room"] = room.Name, ["ok"] = "true" } });
     await room.BroadcastAsync(SystemMsg(room.Name, $"{NameOf(s)} đã vào phòng"), exceptId: s.Id);
 }
@@ -261,6 +273,7 @@ async Task HandleLeaveRoom(ClientSession s, Packet p)
     }
 
     rooms.Leave(name, s);
+    await ChatRepository.RemoveMemberAsync(room.Name, s.UserId!.Value);
     await s.SendAsync(new Packet { Type = "LEAVE_ROOM", Data = new() { ["room"] = room.Name, ["ok"] = "true" } });
     await room.BroadcastAsync(SystemMsg(room.Name, $"{NameOf(s)} đã rời phòng"));
 }
@@ -284,19 +297,54 @@ async Task HandleSendMsg(ClientSession s, Packet p)
         return;
     }
 
+    // Lưu vào CSDL trước, lấy Id của tin làm msgId
+    string content = p.Data.GetValueOrDefault("content", "");
+    long messageId = await ChatRepository.SaveRoomMessageAsync(room.Name, s.UserId!.Value, content);
+
     var outPacket = new Packet
     {
         Type = PacketTypes.NewMsg,
         Data = new()
         {
             ["room"] = room.Name,
-            ["msgId"] = Guid.NewGuid().ToString(),
+            ["msgId"] = messageId.ToString(),
             ["from"] = NameOf(s),   // tên do server xác nhận lúc đăng nhập, không lấy từ client
-            ["content"] = p.Data.GetValueOrDefault("content", ""),
+            ["content"] = content,
             ["time"] = DateTime.Now.ToString("HH:mm")
         }
     };
     await room.BroadcastAsync(outPacket);   // chỉ gửi cho người trong phòng
+}
+
+// GET_HISTORY { room } -> HISTORY { room, messages = "[{msgId, from, content, time}, ...]" }
+async Task HandleGetHistory(ClientSession s, Packet p)
+{
+    string roomName = p.Data.GetValueOrDefault("room", "").Trim();
+    var room = rooms.Get(roomName);
+
+    if (room == null)
+    {
+        await SendError(s, "ROOM_NOT_FOUND", "Phòng không tồn tại");
+        return;
+    }
+    if (!room.Members.ContainsKey(s.Id))
+    {
+        await SendError(s, "NOT_IN_ROOM", "Bạn chưa vào phòng này");
+        return;
+    }
+
+    var history = await ChatRepository.GetRoomHistoryAsync(room.Name);
+
+    // Data chỉ chứa chuỗi, nên danh sách tin được đóng thành một chuỗi JSON
+    await s.SendAsync(new Packet
+    {
+        Type = "HISTORY",
+        Data = new()
+        {
+            ["room"] = room.Name,
+            ["messages"] = JsonSerializer.Serialize(history, historyJson)
+        }
+    });
 }
 
 // ===================== HÀM TIỆN ÍCH =====================
