@@ -2,35 +2,40 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using ViChat.Server;
 using ViChat.Shared;
 
 Console.OutputEncoding = Encoding.UTF8;
 
 const int Port = 5000;
 
-// Danh sách client đang kết nối. ConcurrentDictionary an toàn khi nhiều luồng cùng thêm/xóa.
+// Danh sách client đang kết nối
 var clients = new ConcurrentDictionary<Guid, ClientSession>();
 
-// IPAddress.Any: nhận kết nối từ MỌI máy trong mạng, không chỉ máy này
 var listener = new TcpListener(IPAddress.Any, Port);
 listener.Start();
 Console.WriteLine($"Server đang lắng nghe cổng {Port}...");
 
 while (true)
 {
-    // Chờ client mới. Trong lúc chờ, luồng không bị chiếm (nhờ await).
     TcpClient tcp = await listener.AcceptTcpClientAsync();
+
+    // Chặn ngay từ tầng kết nối nếu đã đủ 2 client
+    if (clients.Count >= 2)
+    {
+        Console.WriteLine($"- Từ chối kết nối từ {tcp.Client.RemoteEndPoint} vì server đã đủ 2 người.");
+        tcp.Close();
+        continue;
+    }
 
     var session = new ClientSession(tcp);
     clients[session.Id] = session;
     Console.WriteLine($"+ Kết nối từ {tcp.Client.RemoteEndPoint}. Đang có {clients.Count} client.");
 
-    // Giao client này cho một Task riêng, KHÔNG await,
-    // để vòng lặp quay lại nhận client tiếp theo ngay.
     _ = HandleClientAsync(session);
 }
 
-// Xử lý MỘT client: đọc gói liên tục cho tới khi client thoát
+// Xử lý MỘT client
 async Task HandleClientAsync(ClientSession session)
 {
     try
@@ -38,44 +43,104 @@ async Task HandleClientAsync(ClientSession session)
         while (true)
         {
             Packet? packet = await PacketIO.ReadAsync(session.Stream);
-            if (packet == null) break;   // client đã đóng kết nối
+            if (packet == null) break;
 
             Console.WriteLine($"  Nhận {packet.Type} từ {session.Tcp.Client.RemoteEndPoint}");
 
-            if (packet.Type == "SEND_MSG")
+            // Các gói tin nhạy cảm bắt buộc phải đăng nhập trước
+            if (session.Username == null &&
+                packet.Type is "PRIVATE_MSG" or "TYPING" or "SEEN" or "ONLINE_LIST" or "FILE_START" or "FILE_CHUNK" or "FILE_END")
             {
-                var outPacket = new Packet
-                {
-                    Type = "NEW_MSG",
-                    Data = new()
+                await PrivateChat.SendErrorAsync(session, "NOT_LOGGED_IN", "Bạn chưa đăng nhập.");
+                continue;
+            }
+
+            switch (packet.Type)
+            {
+                case "SEND_MSG":
                     {
-                        ["from"] = packet.Data.GetValueOrDefault("from", "Ẩn danh"),
-                        ["content"] = packet.Data.GetValueOrDefault("content", ""),
-                        ["time"] = DateTime.Now.ToString("HH:mm")
+                        var outPacket = new Packet
+                        {
+                            Type = "NEW_MSG",
+                            Data = new()
+                            {
+                                ["from"] = packet.Data.GetValueOrDefault("from", "Ẩn danh"),
+                                ["content"] = packet.Data.GetValueOrDefault("content", ""),
+                                ["time"] = DateTime.Now.ToString("HH:mm")
+                            }
+                        };
+                        await BroadcastAsync(outPacket);
+                        break;
                     }
-                };
-                await BroadcastAsync(outPacket);
+
+                case "LOGIN":
+                    {
+                        if (session.Username != null)
+                        {
+                            await PrivateChat.SendErrorAsync(session, "BAD_REQUEST", "Bạn đã đăng nhập rồi.");
+                            break;
+                        }
+
+                        // Kiểm tra giới hạn tối đa 2 người đăng nhập
+                        if (PrivateChat.OnlineUsers.Count >= 2)
+                        {
+                            await PrivateChat.SendErrorAsync(session, "SERVER_FULL", "Phòng chat đã đủ 2 người, không nhận thêm.");
+                            session.Tcp.Close();
+                            return;
+                        }
+
+                        var name = packet.Data.GetValueOrDefault("username")?.Trim();
+                        if (string.IsNullOrEmpty(name) || name.Contains(','))
+                        {
+                            await PrivateChat.SendErrorAsync(session, "BAD_REQUEST", "Tên không hợp lệ (không được rỗng hoặc chứa dấu phẩy).");
+                            break;
+                        }
+                        session.Username = name;
+                        if (await PrivateChat.TryGoOnlineAsync(session))
+                        {
+                            await PrivateChat.TrySendAsync(session,
+                                PrivateChat.MakePacket("LOGIN_RESULT", ("ok", "true")));
+                        }
+                        else
+                        {
+                            session.Username = null;
+                            await PrivateChat.SendErrorAsync(session, "ALREADY_ONLINE", "Tài khoản đang online ở nơi khác.");
+                            session.Tcp.Close();
+                            return;
+                        }
+                        break;
+                    }
+
+                case "PRIVATE_MSG": await PrivateChat.HandlePrivateMsgAsync(session, packet); break;
+                case "TYPING": await PrivateChat.HandleTypingAsync(session, packet); break;
+                case "SEEN": await PrivateChat.HandleSeenAsync(session, packet); break;
+                case "ONLINE_LIST": await PrivateChat.HandleOnlineListAsync(session); break;
+
+                // Xử lý chuyển tiếp truyền file, ảnh, video 1-1
+                case "FILE_START":
+                case "FILE_CHUNK":
+                case "FILE_END":
+                    await PrivateChat.HandleFilePacketAsync(session, packet);
+                    break;
             }
         }
     }
     catch (Exception ex)
     {
-        // Rút dây mạng, tắt ngang client... sẽ rơi vào đây
         Console.WriteLine($"  Lỗi với client: {ex.Message}");
     }
     finally
     {
-        // Dù thoát kiểu gì cũng phải dọn dẹp
+        await PrivateChat.GoOfflineAsync(session);
         clients.TryRemove(session.Id, out _);
         session.Tcp.Close();
         Console.WriteLine($"- Một client đã thoát. Còn {clients.Count} client.");
     }
 }
 
-// Gửi một gói tới TẤT CẢ client
 async Task BroadcastAsync(Packet packet)
 {
-    foreach (var client in clients.Values)
+    var tasks = clients.Values.Select(async client =>
     {
         try
         {
@@ -83,7 +148,8 @@ async Task BroadcastAsync(Packet packet)
         }
         catch
         {
-            // Client này có thể vừa mất kết nối; bỏ qua, phần finally của nó sẽ dọn dẹp
         }
-    }
+    });
+
+    await Task.WhenAll(tasks);
 }
