@@ -3,22 +3,39 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using ViChat.Server;
+using ViChat.Server.Data;
 using ViChat.Shared;
 
 Console.OutputEncoding = Encoding.UTF8;
 
+// ===================== KHỞI TẠO CSDL =====================
+// Chưa có CSDL thì tạo, thiếu bảng thì bổ sung (EF Core Migrations)
+try
+{
+    DbInitializer.Initialize();
+}
+catch (Exception ex)
+{
+    Console.WriteLine("Không khởi tạo được CSDL: " + ex.Message);
+    Console.WriteLine("Kiểm tra LocalDB bằng lệnh: sqllocaldb info");
+    return;
+}
+
 const int Port = 5000;
 
-// Danh sách client đang kết nối
+// Danh sách client đang kết nối (an toàn khi nhiều luồng cùng thêm/xóa)
 var clients = new ConcurrentDictionary<Guid, ClientSession>();
+
+// Khóa dùng khi kiểm tra "tài khoản đang online ở máy khác"
+var loginLock = new object();
 
 // Quản lý các phòng chat (có sẵn phòng "General") – Khánh
 var rooms = new RoomManager();
 
-// Truyền file (FILE_START / FILE_CHUNK / FILE_END) – Thùy.
-// Bản tạm: gửi file cho mọi client khác.
+// Truyền file (FILE_START / FILE_CHUNK / FILE_END) – Thùy
 var fileRelay = FileRelay.CreateDefault("Uploads", clients);
 
+// ===================== NHẬN KẾT NỐI =====================
 // IPAddress.Any: nhận kết nối từ MỌI máy trong mạng
 var listener = new TcpListener(IPAddress.Any, Port);
 listener.Start();
@@ -31,47 +48,26 @@ while (true)
     var session = new ClientSession(tcp);
     clients[session.Id] = session;
 
-    // Client mới tự vào phòng General
-    rooms.Join("General", session);
-
+    // Chưa cho vào phòng nào: phải đăng nhập xong mới vào General (xem HandleLogin)
     Console.WriteLine($"+ Kết nối từ {tcp.Client.RemoteEndPoint}. Đang có {clients.Count} client.");
+
+    // Mỗi client chạy trong một Task riêng, KHÔNG await để quay lại nhận client tiếp theo
     _ = HandleClientAsync(session);
 }
 
+// ===================== XỬ LÝ MỘT CLIENT =====================
 async Task HandleClientAsync(ClientSession session)
 {
-    bool isOnline = false;   // đã vào danh sách online của PrivateChat chưa
-
     try
     {
         while (true)
         {
             Packet? packet = await PacketIO.ReadAsync(session.Stream);
-            if (packet == null) break;
+            if (packet == null) break;   // client đã đóng kết nối
 
             // Không in log cho FILE_CHUNK vì một file lớn có hàng trăm chunk
             if (packet.Type != PacketTypes.FileChunk)
                 Console.WriteLine($"  Nhận {packet.Type} từ {session.Tcp.Client.RemoteEndPoint}");
-
-            // TẠM THỜI: lấy tên từ trường "from" (XÓA khi Kiên làm xong LOGIN).
-            // Chỉ lấy LẦN ĐẦU, không cho đổi tên giữa chừng (tránh lệch danh sách online).
-            if (!isOnline)
-            {
-                string from = packet.Data.GetValueOrDefault("from", "").Trim();
-                if (from.Length > 0)
-                {
-                    session.Username = from;
-
-                    // Đưa vào danh sách online (Đạt). Trùng tên -> báo lỗi rồi ngắt.
-                    if (!await PrivateChat.TryGoOnlineAsync(session))
-                    {
-                        await SendError(session, "ALREADY_LOGGED_IN", $"Tên '{from}' đang được dùng.");
-                        break;
-                    }
-                    isOnline = true;
-                    Console.WriteLine($"  {from} đã online. Đang có {PrivateChat.OnlineUsers.Count} người online.");
-                }
-            }
 
             await ProcessPacketAsync(session, packet);
         }
@@ -83,18 +79,29 @@ async Task HandleClientAsync(ClientSession session)
     finally
     {
         // Dù thoát kiểu gì cũng phải dọn dẹp:
-        await fileRelay.OnDisconnectedAsync(session);              // 1) hủy file đang nhận dở (Thùy)
-        rooms.LeaveAll(session);                                   // 2) rời mọi phòng (Khánh)
-        if (isOnline) await PrivateChat.GoOfflineAsync(session);   // 3) báo offline cho mọi người (Đạt)
-        clients.TryRemove(session.Id, out _);                      // 4) xóa khỏi danh sách, đóng kết nối
+        await fileRelay.OnDisconnectedAsync(session);                          // 1) hủy file đang nhận dở (Thùy)
+        rooms.LeaveAll(session);                                               // 2) rời mọi phòng (Khánh)
+        if (session.IsLoggedIn) await PrivateChat.GoOfflineAsync(session);     // 3) báo offline cho mọi người (Đạt)
+        clients.TryRemove(session.Id, out _);                                  // 4) xóa khỏi danh sách, đóng kết nối
         session.Tcp.Close();
         Console.WriteLine($"- Một client đã thoát. Còn {clients.Count} client.");
     }
 }
 
-// Phân loại gói tin
+// ===================== PHÂN LOẠI GÓI TIN =====================
 async Task ProcessPacketAsync(ClientSession s, Packet p)
 {
+    // Hai gói được phép gửi khi chưa đăng nhập
+    if (p.Type == "REGISTER") { await HandleRegister(s, p); return; }
+    if (p.Type == "LOGIN") { await HandleLogin(s, p); return; }
+
+    // Mọi gói khác: phải đăng nhập rồi mới được dùng
+    if (!s.IsLoggedIn)
+    {
+        await SendError(s, "NOT_LOGGED_IN", "Bạn cần đăng nhập trước");
+        return;
+    }
+
     switch (p.Type)
     {
         // --- Phòng chat (Khánh) ---
@@ -105,20 +112,10 @@ async Task ProcessPacketAsync(ClientSession s, Packet p)
         case PacketTypes.SendMsg: await HandleSendMsg(s, p); break;
 
         // --- Nhắn riêng 1-1, online, đang nhập, đã xem (Đạt) ---
-        case "PRIVATE_MSG":
-        case "ONLINE_LIST":
-        case "TYPING":
-        case "SEEN":
-            if (string.IsNullOrEmpty(s.Username))
-            {
-                await SendError(s, "NOT_LOGGED_IN", "Chưa có tên người dùng.");
-                break;
-            }
-            if (p.Type == "PRIVATE_MSG") await PrivateChat.HandlePrivateMsgAsync(s, p);
-            else if (p.Type == "ONLINE_LIST") await PrivateChat.HandleOnlineListAsync(s);
-            else if (p.Type == "TYPING") await PrivateChat.HandleTypingAsync(s, p);
-            else await PrivateChat.HandleSeenAsync(s, p);
-            break;
+        case "PRIVATE_MSG": await PrivateChat.HandlePrivateMsgAsync(s, p); break;
+        case "ONLINE_LIST": await PrivateChat.HandleOnlineListAsync(s); break;
+        case "TYPING": await PrivateChat.HandleTypingAsync(s, p); break;
+        case "SEEN": await PrivateChat.HandleSeenAsync(s, p); break;
 
         // --- Truyền file (Thùy): giao hết cho FileRelay ---
         case PacketTypes.FileStart:
@@ -133,6 +130,92 @@ async Task ProcessPacketAsync(ClientSession s, Packet p)
     }
 }
 
+// ===================== ĐĂNG KÝ, ĐĂNG NHẬP (CSDL) =====================
+async Task HandleRegister(ClientSession s, Packet p)
+{
+    var (ok, message) = await AuthService.RegisterAsync(
+        p.Data.GetValueOrDefault("username", ""),
+        p.Data.GetValueOrDefault("password", ""),
+        p.Data.GetValueOrDefault("displayName", ""));
+
+    await s.SendAsync(new Packet
+    {
+        Type = "REGISTER_RESULT",
+        Data = new() { ["success"] = ok ? "true" : "false", ["message"] = message }
+    });
+}
+
+async Task HandleLogin(ClientSession s, Packet p)
+{
+    if (s.IsLoggedIn)
+    {
+        await SendLoginResult(s, false, "Bạn đã đăng nhập rồi");
+        return;
+    }
+
+    // 1) Kiểm tra tên và mật khẩu trong CSDL
+    var user = await AuthService.CheckLoginAsync(
+        p.Data.GetValueOrDefault("username", ""),
+        p.Data.GetValueOrDefault("password", ""));
+
+    if (user == null)
+    {
+        await SendLoginResult(s, false, "Sai tên đăng nhập hoặc mật khẩu");
+        return;
+    }
+
+    // 2) Chặn đăng nhập trùng. Kiểm tra và ghi nhận trong cùng một khóa:
+    //    nhiều luồng cùng đăng nhập một tài khoản thì chỉ một luồng thắng
+    bool alreadyOnline;
+    lock (loginLock)
+    {
+        alreadyOnline = clients.Values.Any(c => c.UserId == user.Id);
+        if (!alreadyOnline)
+        {
+            s.UserId = user.Id;
+            s.Username = user.Username;
+        }
+    }
+
+    if (alreadyOnline)
+    {
+        await SendLoginResult(s, false, "Tài khoản đang đăng nhập ở nơi khác");
+        return;
+    }
+
+    // 3) Đưa vào danh sách online và báo cho mọi người (Đạt)
+    if (!await PrivateChat.TryGoOnlineAsync(s))
+    {
+        // Không vào được danh sách online -> hủy đăng nhập vừa ghi nhận
+        s.UserId = null;
+        s.Username = "";
+        await SendLoginResult(s, false, "Tài khoản đang đăng nhập ở nơi khác");
+        return;
+    }
+
+    // 4) Vào phòng General và báo thành công
+    rooms.Join("General", s);
+    await s.SendAsync(new Packet
+    {
+        Type = "LOGIN_RESULT",
+        Data = new()
+        {
+            ["success"] = "true",
+            ["username"] = user.Username,
+            ["displayName"] = user.DisplayName
+        }
+    });
+    Console.WriteLine($"  {user.Username} đã đăng nhập. Đang có {PrivateChat.OnlineUsers.Count} người online.");
+}
+
+Task SendLoginResult(ClientSession s, bool ok, string message) =>
+    s.SendAsync(new Packet
+    {
+        Type = "LOGIN_RESULT",
+        Data = new() { ["success"] = ok ? "true" : "false", ["message"] = message }
+    });
+
+// ===================== PHÒNG CHAT (Khánh) =====================
 async Task HandleCreateRoom(ClientSession s, Packet p)
 {
     string name = p.Data.GetValueOrDefault("room", "").Trim();
@@ -208,7 +291,7 @@ async Task HandleSendMsg(ClientSession s, Packet p)
         {
             ["room"] = room.Name,
             ["msgId"] = Guid.NewGuid().ToString(),
-            ["from"] = NameOf(s),
+            ["from"] = NameOf(s),   // tên do server xác nhận lúc đăng nhập, không lấy từ client
             ["content"] = p.Data.GetValueOrDefault("content", ""),
             ["time"] = DateTime.Now.ToString("HH:mm")
         }
@@ -216,7 +299,7 @@ async Task HandleSendMsg(ClientSession s, Packet p)
     await room.BroadcastAsync(outPacket);   // chỉ gửi cho người trong phòng
 }
 
-// ===== Hàm tiện ích =====
+// ===================== HÀM TIỆN ÍCH =====================
 string NameOf(ClientSession s) => string.IsNullOrEmpty(s.Username) ? "Ẩn danh" : s.Username;
 
 Task SendError(ClientSession s, string code, string message) =>

@@ -9,6 +9,29 @@
 
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <!-- Tab "Phòng" / "Mọi người": chữ tím + gạch chân khi được chọn -->
+        <Style x:Key="TabRadio" TargetType="RadioButton">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{StaticResource SubTextBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="Bd" Background="Transparent" BorderBrush="Transparent"
+                                BorderThickness="0,0,0,2" Padding="0,8">
+                            <ContentPresenter HorizontalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="{StaticResource PrimaryBrush}"/>
+                                <Setter Property="Foreground" Value="{StaticResource PrimaryBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
 
         <!-- Nút tròn nền tím nhạt (nút +, nút đính kèm) -->
         <Style x:Key="SoftCircleButton" TargetType="Button">
@@ -75,15 +98,17 @@
         <!-- Nội dung một dòng phòng -->
         <DataTemplate x:Key="RoomTemplate">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <Border Width="46" Height="46" CornerRadius="23" Background="{Binding AvatarColor}">
-                    <TextBlock Text="{Binding Initials}" Foreground="White" FontSize="15" FontWeight="SemiBold"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                </Border>
+                <Grid Width="46" Height="46">
+                    <Border CornerRadius="23" Background="{Binding AvatarColor}">
+                        <TextBlock Text="{Binding Initials}" Foreground="White" FontSize="15" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <!-- Chấm xanh: người này đang online (phòng thì luôn ẩn) -->
+                    <Ellipse Width="13" Height="13" Fill="{StaticResource SuccessBrush}"
+                             Stroke="White" StrokeThickness="2"
+                             HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                             Visibility="{Binding IsOnline, Converter={StaticResource BoolToVis}}"/>
+                </Grid>
                 <StackPanel Grid.Column="1" Margin="12,0,8,0" VerticalAlignment="Center">
                     <TextBlock Text="{Binding Name}" FontSize="15" FontWeight="SemiBold"
                                Foreground="{StaticResource TextBrush}" TextTrimming="CharacterEllipsis"/>
@@ -110,7 +135,7 @@
                            HorizontalAlignment="Center" FontSize="12" Margin="0,6"
                            Foreground="{StaticResource SubTextBrush}"/>
 
-             
+
 
                 <StackPanel x:Name="NormalPanel" Orientation="Horizontal" HorizontalAlignment="Left">
                     <Border x:Name="Avatar" Width="32" Height="32" CornerRadius="16" VerticalAlignment="Bottom"
@@ -289,6 +314,29 @@
                     </TextBlock>
                 </Grid>
 
+                <!-- Tab: Phòng / Mọi người -->
+                <Grid DockPanel.Dock="Top" Margin="0,0,0,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <RadioButton Grid.Column="0" GroupName="LeftTab" Content="Phòng"
+                                 Style="{StaticResource TabRadio}" IsChecked="{Binding ShowRooms, Mode=TwoWay}"/>
+                    <RadioButton Grid.Column="1" GroupName="LeftTab"
+                                 Style="{StaticResource TabRadio}" IsChecked="{Binding ShowPeople, Mode=TwoWay}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Mọi người"/>
+                            <!-- Số tin riêng chưa đọc -->
+                            <Border Margin="6,0,0,0" MinWidth="18" Height="18" Padding="5,0" CornerRadius="9"
+                                    Background="{StaticResource PrimaryBrush}"
+                                    Visibility="{Binding HasPrivateUnread, Converter={StaticResource BoolToVis}}">
+                                <TextBlock Text="{Binding PrivateUnreadTotal}" Foreground="White" FontSize="11"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </StackPanel>
+                    </RadioButton>
+                </Grid>
+
                 <!-- Người dùng hiện tại (dưới cùng) -->
                 <Border DockPanel.Dock="Bottom" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0"
                         Padding="4,14,4,0" Margin="0,8,0,0">
@@ -334,13 +382,14 @@
                         <StackPanel Margin="12,0,0,0" VerticalAlignment="Center">
                             <TextBlock Text="{Binding SelectedRoom.Name, FallbackValue='Chọn một phòng'}"
                                        FontSize="17" FontWeight="SemiBold" Foreground="{StaticResource TextBrush}"/>
-                            <TextBlock Text="{Binding SelectedRoom.MemberCount, StringFormat='{}{0} người trong phòng'}"
+                            <!-- Phòng: "3 người trong phòng"; chat riêng: "Đang hoạt động" / "Đang nhập..." -->
+                            <TextBlock Text="{Binding SelectedRoom.HeaderSubtitle}"
                                        FontSize="13" Foreground="{StaticResource SuccessBrush}"/>
                         </StackPanel>
                     </StackPanel>
                     <Button Content="Rời phòng" Style="{StaticResource TextButton}" HorizontalAlignment="Right"
                             Command="{Binding LeaveRoomCommand}"
-                            Visibility="{Binding SelectedRoom.IsJoined, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed}"/>
+                            Visibility="{Binding SelectedRoom.CanLeave, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed}"/>
                 </Grid>
             </Border>
 
@@ -447,10 +496,10 @@
                 </Grid>
             </Border>
             <!-- Thông báo lỗi (tự ẩn sau 4 giây) -->
-            <Border DockPanel.Dock="Bottom" HorizontalAlignment="Center" Margin="20,0,20,10" Padding="14,8"
+            <Border DockPanel.Dock="Bottom" Margin="20,0,20,10" Padding="14,8"
                     Background="#FEF2F2" BorderBrush="#FCA5A5" BorderThickness="1" CornerRadius="12"
-                    Visibility="{Binding HasNotice, Converter={StaticResource BoolToVis}}">
-                <TextBlock Text="{Binding Notice}" Foreground="#991B1B" FontSize="13"/>
+                    Visibility="{Binding HasNotice, Converter={StaticResource BoolToVis}}" Height="100">
+                <TextBlock Text="{Binding Notice}" Foreground="#991B1B" FontSize="13" HorizontalAlignment="Right" Width="790"/>
             </Border>
 
             <!-- Khung tin nhắn -->

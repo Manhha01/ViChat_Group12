@@ -117,4 +117,37 @@ public class NetworkClient
         if (dispatcher.CheckAccess()) action();
         else dispatcher.BeginInvoke(action);
     }
+
+    public string DisplayName { get; private set; } = "";
+
+    // Gọi sau khi server xác nhận đăng nhập: dùng đúng tên server trả về
+    public void SetLoggedInUser(string username, string displayName)
+    {
+        UserName = username;
+        DisplayName = displayName;
+    }
+
+    // Chờ server trả về một loại gói (hoặc ERROR), quá thời gian thì báo lỗi.
+    // Dùng cho kiểu "gửi yêu cầu - chờ trả lời" như LOGIN -> LOGIN_RESULT.
+    public Task<Packet> WaitForPacketAsync(string type, int timeoutMs = 5000)
+    {
+        var tcs = new TaskCompletionSource<Packet>();
+
+        void Handler(Packet p)
+        {
+            if (p.Type != type && p.Type != "ERROR") return;
+            PacketReceived -= Handler;
+            tcs.TrySetResult(p);
+        }
+
+        PacketReceived += Handler;
+
+        _ = Task.Delay(timeoutMs).ContinueWith(_ =>
+        {
+            PacketReceived -= Handler;
+            tcs.TrySetException(new TimeoutException("Server không phản hồi."));
+        });
+
+        return tcs.Task;
+    }
 }

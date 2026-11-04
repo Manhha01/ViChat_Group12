@@ -105,11 +105,17 @@
         <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
             <StackPanel MaxWidth="420" Margin="32,40" VerticalAlignment="Center">
 
-                <TextBlock Text="Đăng nhập" Style="{StaticResource HeadingText}"/>
-                <TextBlock Text="Nhập địa chỉ server và tên của bạn." Style="{StaticResource SubText}"
-                           Margin="0,6,0,22"/>
+                <TextBlock Text="{Binding FormTitle}" Style="{StaticResource HeadingText}"/>
+                <TextBlock Text="{Binding FormSubtitle}" Style="{StaticResource SubText}" Margin="0,6,0,22"/>
 
-                <!-- Hộp lỗi đỏ: chỉ hiện khi có lỗi -->
+                <!-- Hộp thông báo xanh (đăng ký thành công) -->
+                <Border Visibility="{Binding HasInfo, Converter={StaticResource BoolToVis}}"
+                        Background="#F0FDF4" BorderBrush="#86EFAC" BorderThickness="1"
+                        CornerRadius="14" Padding="16,12" Margin="0,0,0,18">
+                    <TextBlock Text="{Binding InfoMessage}" TextWrapping="Wrap" Foreground="#166534" FontSize="13"/>
+                </Border>
+
+                <!-- Hộp lỗi đỏ -->
                 <Border Visibility="{Binding HasError, Converter={StaticResource BoolToVis}}"
                         Background="#FEF2F2" BorderBrush="#FCA5A5" BorderThickness="1"
                         CornerRadius="14" Padding="16,12" Margin="0,0,0,18">
@@ -117,8 +123,7 @@
                         <TextBlock Text="{Binding ErrorMessage}" TextWrapping="Wrap"
                                    Foreground="#991B1B" FontSize="13" LineHeight="20"/>
                         <Button Content="Dùng 127.0.0.1 để chạy thử trên máy này"
-                                Command="{Binding UseLocalhostCommand}" Margin="0,8,0,0"
-                                HorizontalAlignment="Left">
+                                Command="{Binding UseLocalhostCommand}" Margin="0,8,0,0" HorizontalAlignment="Left">
                             <Button.Style>
                                 <Style TargetType="Button" BasedOn="{StaticResource TextButton}">
                                     <Setter Property="Visibility" Value="Collapsed"/>
@@ -169,32 +174,44 @@
                     </StackPanel>
                 </Border>
 
-                <!-- Tên hiển thị -->
-                <TextBlock Text="Tên hiển thị" Style="{StaticResource LabelText}" Margin="0,20,0,6"/>
+                <!-- Tên hiển thị: chỉ khi đăng ký -->
+                <StackPanel Visibility="{Binding IsRegisterMode, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="Tên hiển thị" Style="{StaticResource LabelText}" Margin="0,20,0,6"/>
+                    <TextBox Style="{StaticResource RoundTextBox}"
+                             Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}"/>
+                </StackPanel>
+
+                <!-- Tên đăng nhập -->
+                <TextBlock Text="Tên đăng nhập" Style="{StaticResource LabelText}" Margin="0,18,0,6"/>
                 <TextBox Style="{StaticResource RoundTextBox}"
-                         Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}"/>
+                         Text="{Binding Username, UpdateSourceTrigger=PropertyChanged}"/>
 
-                <!-- Mật khẩu: khóa tạm, mở khi server có chức năng đăng nhập -->
+                <!-- Mật khẩu -->
                 <TextBlock Text="Mật khẩu" Style="{StaticResource LabelText}" Margin="0,18,0,6"/>
-                <PasswordBox Style="{StaticResource RoundPasswordBox}" IsEnabled="False" Opacity="0.6"/>
-                <TextBlock Text="Sẽ dùng khi server có chức năng đăng nhập bằng tài khoản."
-                           Style="{StaticResource SubText}" FontSize="12" Margin="16,6,0,0"/>
+                <PasswordBox x:Name="PasswordInput" Style="{StaticResource RoundPasswordBox}"
+                             PasswordChanged="PasswordInput_PasswordChanged"/>
 
-                <!-- Ghi nhớ -->
+                <!-- Nhập lại mật khẩu: chỉ khi đăng ký -->
+                <StackPanel Visibility="{Binding IsRegisterMode, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="Nhập lại mật khẩu" Style="{StaticResource LabelText}" Margin="0,18,0,6"/>
+                    <PasswordBox x:Name="ConfirmPasswordInput" Style="{StaticResource RoundPasswordBox}"
+                                 PasswordChanged="ConfirmPasswordInput_PasswordChanged"/>
+                </StackPanel>
+
                 <CheckBox Content="Ghi nhớ địa chỉ server" IsChecked="{Binding RememberServer}"
                           Margin="0,16,0,0" FontSize="14" Foreground="{StaticResource TextBrush}"
                           VerticalContentAlignment="Center"/>
 
-                <!-- Nút vào chat: IsDefault = bấm Enter cũng được -->
-                <Button Content="{Binding ConnectButtonText}" Command="{Binding ConnectCommand}"
+                <Button Content="{Binding SubmitButtonText}" Command="{Binding SubmitCommand}"
                         Style="{StaticResource PrimaryButton}" IsDefault="True" Margin="0,22,0,0"/>
 
-                <!-- Đăng ký: khóa tạm -->
-                <TextBlock HorizontalAlignment="Center" Margin="0,18,0,0" FontSize="14"
-                           Foreground="{StaticResource SubTextBrush}">
-                    <Run Text="Chưa có tài khoản? "/>
-                    <Hyperlink IsEnabled="False" ToolTip="Sẽ mở khi server có chức năng đăng ký">Đăng ký</Hyperlink>
-                </TextBlock>
+                <!-- Chuyển chế độ -->
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,0">
+                    <TextBlock Text="{Binding SwitchModeQuestion}" FontSize="14"
+                               Foreground="{StaticResource SubTextBrush}" Margin="0,0,6,0"/>
+                    <Button Content="{Binding SwitchModeText}" Command="{Binding ToggleModeCommand}"
+                            Style="{StaticResource TextButton}" FontSize="14"/>
+                </StackPanel>
             </StackPanel>
         </ScrollViewer>
     </Grid>

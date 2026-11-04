@@ -1,34 +1,55 @@
-﻿using CommunityToolkit.Mvvm.ComponentModel;
+﻿using System.Net.Sockets;
+using System.Text.RegularExpressions;
+using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using System.Data;
-using System.Net.Sockets;
 using ViChat.Client.Services;
+using ViChat.Shared;
 
 namespace ViChat.Client.ViewModels;
 
-// "partial" + ObservableObject: thư viện tự sinh code thông báo cho giao diện khi dữ liệu đổi
 public partial class LoginViewModel : ObservableObject
 {
-    // [ObservableProperty] trên field "serverIp" -> thư viện tự sinh property "ServerIp".
-    // Giao diện binding vào ServerIp; gõ chữ vào ô là giá trị ở đây đổi theo, và ngược lại.
+    private static readonly Regex UsernameRule = new("^[a-z0-9._]{3,30}$");
+
+    // ===== Dữ liệu trên form =====
     [ObservableProperty] private string serverIp = "";
     [ObservableProperty] private string port = "";
-    [ObservableProperty] private string displayName = "";
+    [ObservableProperty] private string username = "";
+    [ObservableProperty] private string displayName = "";   // chỉ dùng khi đăng ký
     [ObservableProperty] private bool rememberServer = true;
 
-    // Khi ErrorMessage đổi thì báo luôn cho HasError (để hiện/ẩn hộp lỗi)
+    // PasswordBox không binding được (vì lý do bảo mật của WPF) -> cửa sổ tự gán vào đây
+    public string Password { get; set; } = "";
+    public string ConfirmPassword { get; set; } = "";
+
+    // ===== Chế độ: đăng nhập hay đăng ký =====
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(FormTitle), nameof(FormSubtitle), nameof(SubmitButtonText),
+                              nameof(SwitchModeQuestion), nameof(SwitchModeText))]
+    private bool isRegisterMode;
+
+    public string FormTitle => IsRegisterMode ? "Đăng ký" : "Đăng nhập";
+    public string FormSubtitle => IsRegisterMode
+        ? "Tạo tài khoản ViChat trên server của nhóm."
+        : "Nhập địa chỉ server và tài khoản của bạn.";
+    public string SwitchModeQuestion => IsRegisterMode ? "Đã có tài khoản?" : "Chưa có tài khoản?";
+    public string SwitchModeText => IsRegisterMode ? "Đăng nhập" : "Đăng ký";
+
+    // ===== Thông báo =====
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasError))]
     private string errorMessage = "";
-
-    // Trạng thái kết nối: "Idle" (chưa kết nối) | "Connecting" (đang kết nối) | "Error" (lỗi)
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(StatusText))]
-    [NotifyPropertyChangedFor(nameof(ConnectButtonText))]
-    private string connectionState = "Idle";
-
-    // Các giá trị tính từ dữ liệu trên, giao diện chỉ đọc
     public bool HasError => ErrorMessage.Length > 0;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasInfo))]
+    private string infoMessage = "";
+    public bool HasInfo => InfoMessage.Length > 0;
+
+    // "Idle" | "Connecting" | "Error"
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(StatusText), nameof(SubmitButtonText))]
+    private string connectionState = "Idle";
 
     public string StatusText => ConnectionState switch
     {
@@ -37,50 +58,34 @@ public partial class LoginViewModel : ObservableObject
         _ => "Chưa kết nối"
     };
 
-    public string ConnectButtonText => ConnectionState == "Connecting" ? "Đang kết nối..." : "Vào chat";
+    public string SubmitButtonText =>
+        ConnectionState == "Connecting" ? "Đang xử lý..."
+        : IsRegisterMode ? "Tạo tài khoản" : "Đăng nhập";
 
-    // Báo cho cửa sổ biết đã vào được, để cửa sổ chuyển sang màn chat
     public event Action? LoginSucceeded;
+    public event Action? ClearPasswordsRequested;   // báo cửa sổ xóa trắng ô mật khẩu
 
     public LoginViewModel()
     {
-        // Điền sẵn những gì đã nhớ lần trước
         var settings = SettingsService.Load();
         ServerIp = settings.ServerIp;
         Port = settings.Port.ToString();
-        DisplayName = settings.UserName;
+        Username = settings.UserName;
     }
 
-    // [RelayCommand] trên hàm ConnectAsync -> thư viện tự sinh "ConnectCommand" để gắn vào nút.
-    // Trong lúc hàm đang chạy, nút tự bị khóa, bấm liên tục cũng không kết nối 2 lần.
+    // ===== Nút chính: Đăng nhập / Tạo tài khoản =====
     [RelayCommand]
-    private async Task ConnectAsync()
+    private async Task SubmitAsync()
     {
         ErrorMessage = "";
-        string ip = ServerIp.Trim();
-        string name = DisplayName.Trim();
+        InfoMessage = "";
+        if (!Validate(out string ip, out int portNumber, out string user)) return;
 
-        // Kiểm tra dữ liệu nhập trước khi kết nối
-        if (ip.Length == 0)
-        {
-            ErrorMessage = "Nhập địa chỉ IP của server.";
-            return;
-        }
-        if (!int.TryParse(Port.Trim(), out int portNumber) || portNumber < 1 || portNumber > 65535)
-        {
-            ErrorMessage = "Cổng phải là số từ 1 đến 65535.";
-            return;
-        }
-        if (name.Length == 0)
-        {
-            ErrorMessage = "Nhập tên hiển thị.";
-            return;
-        }
-
+        // 1. Kết nối tới server
         ConnectionState = "Connecting";
         try
         {
-            await App.Network.ConnectAsync(ip, portNumber, name);
+            await App.Network.ConnectAsync(ip, portNumber, user);
         }
         catch (Exception ex) when (ex is SocketException or TimeoutException)
         {
@@ -89,26 +94,120 @@ public partial class LoginViewModel : ObservableObject
                            $"IP có đúng không, hai máy có cùng mạng và tường lửa máy server đã mở cổng {portNumber} chưa.";
             return;
         }
+
+        // 2. Gửi yêu cầu đăng ký hoặc đăng nhập, chờ trả lời
+        try
+        {
+            if (IsRegisterMode) await RegisterAsync(user);
+            else await LoginAsync(user, ip, portNumber);
+        }
         catch (Exception ex)
         {
-            ConnectionState = "Error";
-            ErrorMessage = "Lỗi: " + ex.Message;
+            App.Network.Disconnect();
+            ConnectionState = "Idle";
+            ErrorMessage = ex is TimeoutException
+                ? "Server không phản hồi. Server đã được cập nhật bản có đăng nhập chưa?"
+                : "Lỗi: " + ex.Message;
+        }
+    }
+
+    private async Task LoginAsync(string user, string ip, int portNumber)
+    {
+        var reply = await RequestAsync("LOGIN",
+            new() { ["username"] = user, ["password"] = Password }, "LOGIN_RESULT");
+        ConnectionState = "Idle";
+
+        if (reply.Data.GetValueOrDefault("success") != "true")
+        {
+            App.Network.Disconnect();
+            ErrorMessage = reply.Data.GetValueOrDefault("message", "Đăng nhập thất bại.");
             return;
         }
 
-        if (RememberServer)
-            SettingsService.Save(new AppSettings { ServerIp = ip, Port = portNumber, UserName = name });
+        App.Network.SetLoggedInUser(
+            reply.Data.GetValueOrDefault("username", user),
+            reply.Data.GetValueOrDefault("displayName", user));
 
-        ConnectionState = "Idle";
+        if (RememberServer)
+            SettingsService.Save(new AppSettings { ServerIp = ip, Port = portNumber, UserName = user });
+
         LoginSucceeded?.Invoke();
     }
 
-    // Nút "Dùng 127.0.0.1" trong hộp lỗi: chạy thử trên chính máy này
+    private async Task RegisterAsync(string user)
+    {
+        var reply = await RequestAsync("REGISTER", new()
+        {
+            ["username"] = user,
+            ["password"] = Password,
+            ["displayName"] = DisplayName.Trim()
+        }, "REGISTER_RESULT");
+
+        App.Network.Disconnect();   // đăng ký xong thì ngắt, người dùng đăng nhập lại như bình thường
+        ConnectionState = "Idle";
+
+        if (reply.Data.GetValueOrDefault("success") != "true")
+        {
+            ErrorMessage = reply.Data.GetValueOrDefault("message", "Đăng ký thất bại.");
+            return;
+        }
+
+        IsRegisterMode = false;
+        ClearPasswords();
+        InfoMessage = "Đăng ký thành công. Hãy đăng nhập bằng tài khoản vừa tạo.";
+    }
+
+    // Gửi yêu cầu và chờ trả lời.
+    // PHẢI bắt đầu chờ TRƯỚC khi gửi: nếu server trả lời quá nhanh, ta vẫn bắt kịp.
+    private static async Task<Packet> RequestAsync(string type, Dictionary<string, string> data, string replyType)
+    {
+        Task<Packet> waiter = App.Network.WaitForPacketAsync(replyType);
+        await App.Network.SendAsync(type, data);
+        return await waiter;
+    }
+
+    // Kiểm tra dữ liệu nhập trước khi gửi đi
+    private bool Validate(out string ip, out int portNumber, out string user)
+    {
+        ip = ServerIp.Trim();
+        user = Username.Trim().ToLowerInvariant();
+        portNumber = 0;
+
+        if (ip.Length == 0) { ErrorMessage = "Nhập địa chỉ IP của server."; return false; }
+        if (!int.TryParse(Port.Trim(), out portNumber) || portNumber < 1 || portNumber > 65535)
+        { ErrorMessage = "Cổng phải là số từ 1 đến 65535."; return false; }
+        if (!UsernameRule.IsMatch(user))
+        { ErrorMessage = "Tên đăng nhập 3-30 ký tự, chỉ gồm chữ thường không dấu, số, dấu . và _"; return false; }
+        if (Password.Length < 6) { ErrorMessage = "Mật khẩu tối thiểu 6 ký tự."; return false; }
+        if (IsRegisterMode && Password != ConfirmPassword)
+        { ErrorMessage = "Mật khẩu nhập lại không khớp."; return false; }
+
+        return true;
+    }
+
+    // ===== Chuyển giữa Đăng nhập và Đăng ký =====
+    [RelayCommand]
+    private void ToggleMode()
+    {
+        IsRegisterMode = !IsRegisterMode;
+        ErrorMessage = "";
+        InfoMessage = "";
+        ConnectionState = "Idle";
+        ClearPasswords();
+    }
+
     [RelayCommand]
     private void UseLocalhost()
     {
         ServerIp = "127.0.0.1";
         ErrorMessage = "";
         ConnectionState = "Idle";
+    }
+
+    private void ClearPasswords()
+    {
+        Password = "";
+        ConfirmPassword = "";
+        ClearPasswordsRequested?.Invoke();
     }
 }

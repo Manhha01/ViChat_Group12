@@ -13,6 +13,10 @@ public class ClientSession
     // ===== THÊM MỚI =====
     // Tên người dùng. Tạm lấy từ TestClient; sau này thành viên 3 gán khi LOGIN thành công.
     public string Username { get; set; } = "";
+    
+    // Id trong bảng Users; null = chưa đăng nhập
+    public int? UserId { get; set; }
+    public bool IsLoggedIn => UserId != null;
 
     // Các phòng client này đang tham gia (key = tên phòng, value không dùng).
     public ConcurrentDictionary<string, byte> Rooms { get; } = new();

@@ -53,6 +53,11 @@ _ = Task.Run(async () =>
 
             switch (p.Type)
             {
+                case "REGISTER_RESULT":
+                case "LOGIN_RESULT":
+                    Console.WriteLine($"* {p.Type}: success={p.Data.GetValueOrDefault("success")} " +
+                                      $"{p.Data.GetValueOrDefault("message", "")}");
+                    break;
                 // --- Phòng chat (Hà + Khánh) ---
                 case PacketTypes.NewMsg:
                     Console.WriteLine(
@@ -163,6 +168,23 @@ while (true)
 
         switch (cmd)
         {
+            case "/register":   // /register tendangnhap matkhau Tên hiển thị
+                var r = arg.Split(' ', 3);
+                await Send("REGISTER", new()
+                {
+                    ["username"] = r[0],
+                    ["password"] = r.Length > 1 ? r[1] : "",
+                    ["displayName"] = r.Length > 2 ? r[2] : r[0]
+                });
+                break;
+            case "/login":      // /login tendangnhap matkhau
+                var l = arg.Split(' ', 2);
+                await Send("LOGIN", new()
+                {
+                    ["username"] = l[0],
+                    ["password"] = l.Length > 1 ? l[1] : ""
+                });
+                break;
             case "/rooms":
                 await Send("ROOM_LIST", new());
                 break;

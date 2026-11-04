@@ -5,20 +5,34 @@ namespace ViChat.Client.Views;
 
 public partial class LoginWindow : Window
 {
+    private readonly LoginViewModel _vm;
+
     public LoginWindow()
     {
         InitializeComponent();
 
-        var vm = new LoginViewModel();
-        vm.LoginSucceeded += OpenChat;
-        DataContext = vm; // DataContext: nguồn dữ liệu cho mọi {Binding ...} trong XAML
+        _vm = new LoginViewModel();
+        _vm.LoginSucceeded += OpenChat;
+        _vm.ClearPasswordsRequested += () =>
+        {
+            PasswordInput.Clear();
+            ConfirmPasswordInput.Clear();
+        };
+        DataContext = _vm;
     }
+
+    // PasswordBox không binding được nên chuyển giá trị vào ViewModel bằng tay
+    private void PasswordInput_PasswordChanged(object sender, RoutedEventArgs e) =>
+        _vm.Password = PasswordInput.Password;
+
+    private void ConfirmPasswordInput_PasswordChanged(object sender, RoutedEventArgs e) =>
+        _vm.ConfirmPassword = ConfirmPasswordInput.Password;
 
     private void OpenChat()
     {
         var chat = new ChatWindow();
         Application.Current.MainWindow = chat;
         chat.Show();
-        Close(); // đóng màn đăng nhập
+        Close();
     }
 }
