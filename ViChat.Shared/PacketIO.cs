@@ -11,19 +11,26 @@ public static class PacketIO
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
-    // Giới hạn kích thước 1 gói để tránh client gửi số độ dài bậy làm sập server
-    private const int MaxPacketSize = 10 * 1024 * 1024; // 10 MB
+    // Giới hạn kích thước 1 gói để tránh client gửi số độ dài bậy làm sập server.
+    // Giá trị dùng chung nằm trong ProtocolLimits (PacketTypes.cs), khớp docs/protocol.md.
+    private const int MaxPacketSize = ProtocolLimits.MaxPacketBytes; // 1 MB
 
     // GHI một gói: đổi Packet thành JSON, ghi 4 byte độ dài, rồi ghi phần JSON
     public static async Task WriteAsync(Stream stream, Packet packet)
     {
         byte[] body = JsonSerializer.SerializeToUtf8Bytes(packet, JsonOptions);
 
-        byte[] header = new byte[4];
-        BinaryPrimitives.WriteInt32BigEndian(header, body.Length);
+        // Chặn từ phía gửi: gói quá lớn thì bên nhận cũng sẽ từ chối
+        if (body.Length > MaxPacketSize)
+            throw new InvalidOperationException(
+                $"Gói {packet.Type} quá lớn ({body.Length} byte, tối đa {MaxPacketSize}).");
 
-        await stream.WriteAsync(header);
-        await stream.WriteAsync(body);
+        // Ghép header (4 byte độ dài, big-endian) và body vào một mảng để ghi MỘT lần
+        byte[] frame = new byte[4 + body.Length];
+        BinaryPrimitives.WriteInt32BigEndian(frame, body.Length);
+        body.CopyTo(frame, 4);
+
+        await stream.WriteAsync(frame);
     }
 
     // ĐỌC một gói. Trả về null nếu bên kia đã đóng kết nối.

@@ -2,6 +2,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using ViChat.Server;
 using ViChat.Shared;
 
 Console.OutputEncoding = Encoding.UTF8;
@@ -11,9 +12,15 @@ const int Port = 5000;
 // Danh sách client đang kết nối
 var clients = new ConcurrentDictionary<Guid, ClientSession>();
 
-// Quản lý các phòng chat (có sẵn phòng "General")
+// Quản lý các phòng chat (có sẵn phòng "General") – phần của Khánh
 var rooms = new RoomManager();
 
+// Xử lý truyền file (FILE_START / FILE_CHUNK / FILE_END) – phần của Thùy.
+// Phải khai báo SAU khi có clients.
+// Bản tạm: gửi file cho mọi client khác; khi có phòng/đăng nhập sẽ thay bằng hàm thật.
+var fileRelay = FileRelay.CreateDefault("Uploads", clients);
+
+// IPAddress.Any: nhận kết nối từ MỌI máy trong mạng, không chỉ máy này
 var listener = new TcpListener(IPAddress.Any, Port);
 listener.Start();
 Console.WriteLine($"Server đang lắng nghe cổng {Port}...");
@@ -41,9 +48,11 @@ async Task HandleClientAsync(ClientSession session)
             Packet? packet = await PacketIO.ReadAsync(session.Stream);
             if (packet == null) break;
 
-            Console.WriteLine($"  Nhận {packet.Type} từ {session.Tcp.Client.RemoteEndPoint}");
+            // Không in log cho FILE_CHUNK vì một file lớn có hàng trăm chunk, sẽ tràn màn hình
+            if (packet.Type != PacketTypes.FileChunk)
+                Console.WriteLine($"  Nhận {packet.Type} từ {session.Tcp.Client.RemoteEndPoint}");
 
-            // TẠM THỜI: lấy tên từ trường "from". XÓA khi thành viên 3 làm xong LOGIN.
+            // TẠM THỜI: lấy tên từ trường "from". XÓA khi Kiên làm xong LOGIN.
             string from = packet.Data.GetValueOrDefault("from", "");
             if (!string.IsNullOrWhiteSpace(from)) session.Username = from;
 
@@ -56,8 +65,12 @@ async Task HandleClientAsync(ClientSession session)
     }
     finally
     {
-        // Dù thoát kiểu gì cũng phải dọn dẹp: rời mọi phòng rồi mới xóa khỏi danh sách
+        // Dù thoát kiểu gì cũng phải dọn dẹp:
+        // 1) Hủy file đang nhận dở của client này và báo cho người nhận (Thùy)
+        await fileRelay.OnDisconnectedAsync(session);
+        // 2) Rời mọi phòng (Khánh)
         rooms.LeaveAll(session);
+        // 3) Xóa khỏi danh sách và đóng kết nối
         clients.TryRemove(session.Id, out _);
         session.Tcp.Close();
         Console.WriteLine($"- Một client đã thoát. Còn {clients.Count} client.");
@@ -69,11 +82,20 @@ async Task ProcessPacketAsync(ClientSession s, Packet p)
 {
     switch (p.Type)
     {
+        // --- Phòng chat (Khánh) ---
         case "CREATE_ROOM": await HandleCreateRoom(s, p); break;
         case "JOIN_ROOM": await HandleJoinRoom(s, p); break;
         case "LEAVE_ROOM": await HandleLeaveRoom(s, p); break;
         case "ROOM_LIST": await HandleRoomList(s); break;
-        case "SEND_MSG": await HandleSendMsg(s, p); break;
+        case PacketTypes.SendMsg: await HandleSendMsg(s, p); break;
+
+        // --- Truyền file (Thùy): giao hết cho FileRelay ---
+        case PacketTypes.FileStart:
+        case PacketTypes.FileChunk:
+        case PacketTypes.FileEnd:
+            await fileRelay.HandleAsync(s, p);
+            break;
+
         default:
             await SendError(s, "UNKNOWN_TYPE", $"Không hỗ trợ gói {p.Type}");
             break;
@@ -151,10 +173,11 @@ async Task HandleSendMsg(ClientSession s, Packet p)
 
     var outPacket = new Packet
     {
-        Type = "NEW_MSG",
+        Type = PacketTypes.NewMsg,
         Data = new()
         {
             ["room"] = room.Name,
+            ["msgId"] = Guid.NewGuid().ToString(),   // MỚI: mã riêng của tin (dùng cho lịch sử, đã xem)
             ["from"] = NameOf(s),
             ["content"] = p.Data.GetValueOrDefault("content", ""),
             ["time"] = DateTime.Now.ToString("HH:mm")
@@ -169,13 +192,14 @@ string NameOf(ClientSession s) => string.IsNullOrEmpty(s.Username) ? "Ẩn danh"
 Task SendError(ClientSession s, string code, string message) =>
     s.SendAsync(new Packet { Type = "ERROR", Data = new() { ["code"] = code, ["message"] = message } });
 
-// Thông báo hệ thống dùng chính gói NEW_MSG nên TestClient hiển thị được ngay
+// Thông báo hệ thống dùng chính gói NEW_MSG nên client hiển thị được ngay
 Packet SystemMsg(string room, string text) => new()
 {
-    Type = "NEW_MSG",
+    Type = PacketTypes.NewMsg,
     Data = new()
     {
         ["room"] = room,
+        ["msgId"] = Guid.NewGuid().ToString(),   // MỚI
         ["from"] = "Hệ thống",
         ["content"] = text,
         ["time"] = DateTime.Now.ToString("HH:mm")
