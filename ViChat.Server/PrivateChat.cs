@@ -50,7 +50,7 @@ namespace ViChat.Server
                 ("users", string.Join(",", OnlineUsers.Keys))));
 
             await BroadcastAsync(MakePacket("USER_STATUS",
-                ("user", name), ("status", "online")), except: session);
+                ("username", name), ("status", "online")), except: session);
             return true;
         }
 
@@ -61,7 +61,7 @@ namespace ViChat.Server
             if (OnlineUsers.TryRemove(new KeyValuePair<string, ClientSession>(session.Username, session)))
             {
                 await BroadcastAsync(MakePacket("USER_STATUS",
-                    ("user", session.Username), ("status", "offline")), except: session);
+                    ("username", session.Username), ("status", "offline")), except: session);
             }
         }
 
@@ -105,7 +105,7 @@ namespace ViChat.Server
                 ("to", target.Username!),
                 ("content", content),
                 ("msgId", Guid.NewGuid().ToString("N")),
-                ("time", DateTime.UtcNow.ToString("o")));
+                ("time", DateTime.Now.ToString("HH:mm")));
 
             if (!await TrySendAsync(target, msg))
             {

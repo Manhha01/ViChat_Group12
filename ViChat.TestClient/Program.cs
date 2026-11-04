@@ -67,6 +67,19 @@ _ = Task.Run(async () =>
                 case "LEAVE_ROOM":
                     Console.WriteLine($"* {p.Type} '{p.Data.GetValueOrDefault("room", "")}' thành công");
                     break;
+                // --- Nhắn riêng, online (Đạt) ---
+                case "PRIVATE_MSG":
+                    Console.WriteLine($"[RIÊNG] [{p.Data.GetValueOrDefault("time", "")}] " +
+                        $"{p.Data.GetValueOrDefault("from", "?")} → {p.Data.GetValueOrDefault("to", "?")}: " +
+                        $"{p.Data.GetValueOrDefault("content", "")}");
+                    break;
+                case "ONLINE_LIST":
+                    Console.WriteLine("Đang online: " + p.Data.GetValueOrDefault("users", ""));
+                    break;
+                case "USER_STATUS":
+                    Console.WriteLine($"* {p.Data.GetValueOrDefault("username", "?")} " +
+                        $"{(p.Data.GetValueOrDefault("status") == "online" ? "vừa online" : "đã offline")}");
+                    break;
                 case "ERROR":
                     Console.WriteLine(
                         $"! Lỗi {p.Data.GetValueOrDefault("code", "")}: {p.Data.GetValueOrDefault("message", "")}");
@@ -167,6 +180,15 @@ while (true)
             case "/room":
                 currentRoom = arg;
                 Console.WriteLine($"Giờ bạn gõ tin vào phòng {currentRoom}");
+                break;
+            case "/online":
+                await Send("ONLINE_LIST", new());
+                break;
+            case "/pm":
+                // Cú pháp: /pm <tên> <nội dung>
+                string[] pm = arg.Split(' ', 2, StringSplitOptions.TrimEntries);
+                if (pm.Length < 2) { Console.WriteLine("Cú pháp: /pm <tên> <nội dung>"); break; }
+                await Send("PRIVATE_MSG", new() { ["to"] = pm[0], ["content"] = pm[1] });
                 break;
             default:
                 Console.WriteLine("Lệnh không có.");

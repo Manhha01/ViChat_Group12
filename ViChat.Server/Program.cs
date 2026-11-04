@@ -12,15 +12,14 @@ const int Port = 5000;
 // Danh sách client đang kết nối
 var clients = new ConcurrentDictionary<Guid, ClientSession>();
 
-// Quản lý các phòng chat (có sẵn phòng "General") – phần của Khánh
+// Quản lý các phòng chat (có sẵn phòng "General") – Khánh
 var rooms = new RoomManager();
 
-// Xử lý truyền file (FILE_START / FILE_CHUNK / FILE_END) – phần của Thùy.
-// Phải khai báo SAU khi có clients.
-// Bản tạm: gửi file cho mọi client khác; khi có phòng/đăng nhập sẽ thay bằng hàm thật.
+// Truyền file (FILE_START / FILE_CHUNK / FILE_END) – Thùy.
+// Bản tạm: gửi file cho mọi client khác.
 var fileRelay = FileRelay.CreateDefault("Uploads", clients);
 
-// IPAddress.Any: nhận kết nối từ MỌI máy trong mạng, không chỉ máy này
+// IPAddress.Any: nhận kết nối từ MỌI máy trong mạng
 var listener = new TcpListener(IPAddress.Any, Port);
 listener.Start();
 Console.WriteLine($"Server đang lắng nghe cổng {Port}...");
@@ -41,6 +40,8 @@ while (true)
 
 async Task HandleClientAsync(ClientSession session)
 {
+    bool isOnline = false;   // đã vào danh sách online của PrivateChat chưa
+
     try
     {
         while (true)
@@ -48,13 +49,29 @@ async Task HandleClientAsync(ClientSession session)
             Packet? packet = await PacketIO.ReadAsync(session.Stream);
             if (packet == null) break;
 
-            // Không in log cho FILE_CHUNK vì một file lớn có hàng trăm chunk, sẽ tràn màn hình
+            // Không in log cho FILE_CHUNK vì một file lớn có hàng trăm chunk
             if (packet.Type != PacketTypes.FileChunk)
                 Console.WriteLine($"  Nhận {packet.Type} từ {session.Tcp.Client.RemoteEndPoint}");
 
-            // TẠM THỜI: lấy tên từ trường "from". XÓA khi Kiên làm xong LOGIN.
-            string from = packet.Data.GetValueOrDefault("from", "");
-            if (!string.IsNullOrWhiteSpace(from)) session.Username = from;
+            // TẠM THỜI: lấy tên từ trường "from" (XÓA khi Kiên làm xong LOGIN).
+            // Chỉ lấy LẦN ĐẦU, không cho đổi tên giữa chừng (tránh lệch danh sách online).
+            if (!isOnline)
+            {
+                string from = packet.Data.GetValueOrDefault("from", "").Trim();
+                if (from.Length > 0)
+                {
+                    session.Username = from;
+
+                    // Đưa vào danh sách online (Đạt). Trùng tên -> báo lỗi rồi ngắt.
+                    if (!await PrivateChat.TryGoOnlineAsync(session))
+                    {
+                        await SendError(session, "ALREADY_LOGGED_IN", $"Tên '{from}' đang được dùng.");
+                        break;
+                    }
+                    isOnline = true;
+                    Console.WriteLine($"  {from} đã online. Đang có {PrivateChat.OnlineUsers.Count} người online.");
+                }
+            }
 
             await ProcessPacketAsync(session, packet);
         }
@@ -66,12 +83,10 @@ async Task HandleClientAsync(ClientSession session)
     finally
     {
         // Dù thoát kiểu gì cũng phải dọn dẹp:
-        // 1) Hủy file đang nhận dở của client này và báo cho người nhận (Thùy)
-        await fileRelay.OnDisconnectedAsync(session);
-        // 2) Rời mọi phòng (Khánh)
-        rooms.LeaveAll(session);
-        // 3) Xóa khỏi danh sách và đóng kết nối
-        clients.TryRemove(session.Id, out _);
+        await fileRelay.OnDisconnectedAsync(session);              // 1) hủy file đang nhận dở (Thùy)
+        rooms.LeaveAll(session);                                   // 2) rời mọi phòng (Khánh)
+        if (isOnline) await PrivateChat.GoOfflineAsync(session);   // 3) báo offline cho mọi người (Đạt)
+        clients.TryRemove(session.Id, out _);                      // 4) xóa khỏi danh sách, đóng kết nối
         session.Tcp.Close();
         Console.WriteLine($"- Một client đã thoát. Còn {clients.Count} client.");
     }
@@ -88,6 +103,22 @@ async Task ProcessPacketAsync(ClientSession s, Packet p)
         case "LEAVE_ROOM": await HandleLeaveRoom(s, p); break;
         case "ROOM_LIST": await HandleRoomList(s); break;
         case PacketTypes.SendMsg: await HandleSendMsg(s, p); break;
+
+        // --- Nhắn riêng 1-1, online, đang nhập, đã xem (Đạt) ---
+        case "PRIVATE_MSG":
+        case "ONLINE_LIST":
+        case "TYPING":
+        case "SEEN":
+            if (string.IsNullOrEmpty(s.Username))
+            {
+                await SendError(s, "NOT_LOGGED_IN", "Chưa có tên người dùng.");
+                break;
+            }
+            if (p.Type == "PRIVATE_MSG") await PrivateChat.HandlePrivateMsgAsync(s, p);
+            else if (p.Type == "ONLINE_LIST") await PrivateChat.HandleOnlineListAsync(s);
+            else if (p.Type == "TYPING") await PrivateChat.HandleTypingAsync(s, p);
+            else await PrivateChat.HandleSeenAsync(s, p);
+            break;
 
         // --- Truyền file (Thùy): giao hết cho FileRelay ---
         case PacketTypes.FileStart:
@@ -164,7 +195,6 @@ async Task HandleSendMsg(ClientSession s, Packet p)
         await SendError(s, "ROOM_NOT_FOUND", "Phòng không tồn tại");
         return;
     }
-    // Phải là thành viên mới được gửi vào phòng
     if (!room.Members.ContainsKey(s.Id))
     {
         await SendError(s, "NOT_IN_ROOM", "Bạn chưa vào phòng này");
@@ -177,7 +207,7 @@ async Task HandleSendMsg(ClientSession s, Packet p)
         Data = new()
         {
             ["room"] = room.Name,
-            ["msgId"] = Guid.NewGuid().ToString(),   // MỚI: mã riêng của tin (dùng cho lịch sử, đã xem)
+            ["msgId"] = Guid.NewGuid().ToString(),
             ["from"] = NameOf(s),
             ["content"] = p.Data.GetValueOrDefault("content", ""),
             ["time"] = DateTime.Now.ToString("HH:mm")
@@ -199,7 +229,7 @@ Packet SystemMsg(string room, string text) => new()
     Data = new()
     {
         ["room"] = room,
-        ["msgId"] = Guid.NewGuid().ToString(),   // MỚI
+        ["msgId"] = Guid.NewGuid().ToString(),
         ["from"] = "Hệ thống",
         ["content"] = text,
         ["time"] = DateTime.Now.ToString("HH:mm")
