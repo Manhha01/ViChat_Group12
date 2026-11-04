@@ -10,6 +10,7 @@ public class ClientSession
     public TcpClient Tcp { get; }
     public NetworkStream Stream { get; }
 
+    public string? Username { get; set; }
     public ClientSession(TcpClient tcp)
     {
         Tcp = tcp;
