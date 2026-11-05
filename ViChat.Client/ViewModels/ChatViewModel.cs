@@ -2,6 +2,7 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
+using System.Text.Json;
 using System.Windows.Data;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -28,6 +29,15 @@ public partial class ChatViewModel : ObservableObject
 
     private static readonly HashSet<string> ImageExtensions =
         new(StringComparer.OrdinalIgnoreCase) { ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp" };
+
+    // ===== Lịch sử tin nhắn (CSDL) =====
+    // Phòng / chat riêng đã tải lịch sử rồi thì không tải lại
+    private readonly HashSet<string> _historyLoaded = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly JsonSerializerOptions HistoryJson = new(JsonSerializerDefaults.Web);
+
+    // Một tin trong gói HISTORY / PRIVATE_HISTORY (khớp với ChatRepository.HistoryItem của server)
+    private record HistoryDto(string MsgId, string From, string Content, string Time,
+                              string Kind, string? FileName, long FileSize);
 
     // ===== Đang nhập (chat riêng) =====
     private bool _typingSent;        // đã báo "đang nhập" cho người kia chưa
@@ -117,9 +127,10 @@ public partial class ChatViewModel : ObservableObject
         _noticeTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
         _noticeTimer.Tick += (_, _) => { Notice = ""; _noticeTimer.Stop(); };
 
-        // Gói đầu tiên: lấy danh sách phòng, đồng thời để server biết tên mình (qua "from").
-        // Server đưa mình vào danh sách online rồi tự gửi ONLINE_LIST về.
+        // Đã đăng nhập xong: hỏi danh sách phòng, danh sách người online và lịch sử phòng General
         _ = SafeSendAsync("ROOM_LIST");
+        _ = SafeSendAsync("ONLINE_LIST");
+        RequestRoomHistory("General");
     }
 
     // Gọi khi đóng cửa sổ: hủy đăng ký sự kiện, dừng timer, xóa file nhận dở
@@ -153,6 +164,7 @@ public partial class ChatViewModel : ObservableObject
                 ShowPeople = false;               // chuyển về tab "Phòng"
                 SelectedRoom = joined;
                 _ = SafeSendAsync("ROOM_LIST");   // cập nhật lại số người
+                RequestRoomHistory(joined.Name);  // tải tin cũ của phòng
                 break;
 
             case "LEAVE_ROOM":
@@ -162,6 +174,7 @@ public partial class ChatViewModel : ObservableObject
                 left.LastMessage = "";
                 left.LastTime = "";
                 GetMessages(left.Key).Clear();
+                _historyLoaded.Remove(left.Key);  // vào lại phòng thì tải lại lịch sử
                 if (SelectedRoom == left)
                     SelectedRoom = Rooms.FirstOrDefault(r => !r.IsPrivate && r.IsJoined);
                 _ = SafeSendAsync("ROOM_LIST");
@@ -169,6 +182,17 @@ public partial class ChatViewModel : ObservableObject
 
             case "NEW_MSG":
                 AddMessage(p);
+                break;
+
+            // ----- Lịch sử tin nhắn từ CSDL -----
+            case "HISTORY":
+                AddHistory(GetOrAddRoom(room), p.Data.GetValueOrDefault("messages", "[]"));
+                break;
+
+            case "PRIVATE_HISTORY":
+                string with = p.Data.GetValueOrDefault("with", "");
+                if (with.Length > 0)
+                    AddHistory(GetOrAddUser(with), p.Data.GetValueOrDefault("messages", "[]"));
                 break;
 
             // ----- Chat riêng, online, đang nhập (phần server của Đạt) -----
@@ -250,6 +274,7 @@ public partial class ChatViewModel : ObservableObject
         var msg = new ChatMessage
         {
             Room = roomName,
+            MsgId = p.Data.GetValueOrDefault("msgId", ""),
             From = from,
             Content = p.Data.GetValueOrDefault("content", ""),
             Time = p.Data.GetValueOrDefault("time", ""),
@@ -274,6 +299,7 @@ public partial class ChatViewModel : ObservableObject
         var msg = new ChatMessage
         {
             Room = chat.Key,
+            MsgId = p.Data.GetValueOrDefault("msgId", ""),
             From = from,
             Content = p.Data.GetValueOrDefault("content", ""),
             Time = p.Data.GetValueOrDefault("time", ""),
@@ -533,6 +559,10 @@ public partial class ChatViewModel : ObservableObject
         // Bấm vào phòng chưa tham gia -> tự vào phòng
         if (!value.IsPrivate && !value.IsJoined)
             _ = SafeSendAsync("JOIN_ROOM", new() { ["room"] = value.Name });
+
+        // Mở cuộc trò chuyện riêng lần đầu -> tải tin cũ
+        if (value.IsPrivate)
+            RequestPrivateHistory(value.Name);
     }
 
     partial void OnSearchTextChanged(string value) => RoomsView.Refresh();
@@ -588,6 +618,77 @@ public partial class ChatViewModel : ObservableObject
 
     [RelayCommand]
     private void Logout() => LogoutRequested?.Invoke();
+
+    // ================== LỊCH SỬ TIN NHẮN ==================
+    private void RequestRoomHistory(string roomName)
+    {
+        var room = GetOrAddRoom(roomName);
+        if (!_historyLoaded.Add(room.Key)) return;   // đã tải rồi
+        _ = SafeSendAsync("GET_HISTORY", new() { ["room"] = room.Name });
+    }
+
+    private void RequestPrivateHistory(string username)
+    {
+        var chat = GetOrAddUser(username);
+        if (!_historyLoaded.Add(chat.Key)) return;
+        _ = SafeSendAsync("GET_PRIVATE_HISTORY", new() { ["with"] = chat.Name });
+    }
+
+    // Chèn tin cũ lên ĐẦU khung chat (trước các tin mới vừa nhận), bỏ qua tin đã có
+    private void AddHistory(RoomItem room, string json)
+    {
+        List<HistoryDto>? items;
+        try
+        {
+            items = JsonSerializer.Deserialize<List<HistoryDto>>(json, HistoryJson);
+        }
+        catch (JsonException)
+        {
+            return;
+        }
+        if (items == null || items.Count == 0) return;
+
+        var list = GetMessages(room.Key);
+        var existing = new HashSet<string>(list.Select(m => m.MsgId).Where(id => id.Length > 0));
+
+        int index = 0;
+        foreach (var h in items)
+        {
+            if (existing.Contains(h.MsgId)) continue;   // tin này đã nhận trực tiếp rồi
+            list.Insert(index++, ToChatMessage(room, h));
+        }
+
+        // Phòng chưa có "tin cuối" -> lấy tin cuối trong lịch sử
+        if (room.LastMessage.Length == 0)
+        {
+            var last = items[^1];
+            room.LastMessage = IsMe(last.From) ? $"Bạn: {last.Content}"
+                : room.IsPrivate ? last.Content
+                : $"{last.From}: {last.Content}";
+            room.LastTime = last.Time;
+        }
+
+        if (room == SelectedRoom) MessagesChanged?.Invoke();
+    }
+
+    private ChatMessage ToChatMessage(RoomItem room, HistoryDto h)
+    {
+        bool isFile = h.Kind == FileKinds.File || h.Kind == FileKinds.Image;
+        return new ChatMessage
+        {
+            Room = room.Key,
+            MsgId = h.MsgId,
+            From = h.From,
+            Content = h.Content,
+            Time = h.Time,
+            IsMine = IsMe(h.From),
+            Kind = isFile ? h.Kind : "text",
+            FileName = h.FileName ?? "",
+            FileSize = h.FileSize,
+            // File cũ nằm trên server, máy này chưa có bản sao để mở
+            Status = isFile ? "File cũ, đang lưu trên server" : ""
+        };
+    }
 
     // ================== HÀM PHỤ ==================
     private bool IsMe(string name) => name.Equals(UserName, StringComparison.OrdinalIgnoreCase);

@@ -1,5 +1,6 @@
 ﻿using System.Collections.Concurrent;
 using System.Text;
+using ViChat.Server.Data;
 using ViChat.Shared;
 
 namespace ViChat.Server
@@ -100,11 +101,15 @@ namespace ViChat.Server
                 return;
             }
 
+            // Lưu vào CSDL trước, lấy Id của tin làm msgId
+            long messageId = await ChatRepository.SavePrivateMessageAsync(
+                from.UserId!.Value, target.UserId!.Value, content);
+
             var msg = MakePacket("PRIVATE_MSG",
                 ("from", from.Username!),
                 ("to", target.Username!),
                 ("content", content),
-                ("msgId", Guid.NewGuid().ToString("N")),
+                ("msgId", messageId.ToString()),
                 ("time", DateTime.Now.ToString("HH:mm")));
 
             if (!await TrySendAsync(target, msg))

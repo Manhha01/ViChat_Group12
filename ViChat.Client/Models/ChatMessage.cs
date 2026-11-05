@@ -14,6 +14,7 @@ public partial class ChatMessage : ObservableObject
 {
     // ===== Phần cũ (tin chữ) =====
     public string Room { get; init; } = "";
+    public string MsgId { get; init; } = "";     // Id của tin trong CSDL server (để không hiện trùng khi tải lịch sử)
     public string From { get; init; } = "";
     public string Content { get; init; } = "";   // tin chữ; với file là dòng tóm tắt "📎 tên file"
     public string Time { get; init; } = "";

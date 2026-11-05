@@ -18,6 +18,13 @@ public class FileRelay
     private sealed class Route
     {
         public ClientSession[] Recipients = Array.Empty<ClientSession>();
+
+        // Thông tin chốt lúc FILE_START, dùng để lưu vào CSDL khi file gửi xong
+        public string TargetType = "";
+        public string Target = "";
+        public string Kind = "";
+        public string Size = "";
+        public string Sha256 = "";
     }
 
     private readonly string _uploadDir;
@@ -119,7 +126,15 @@ public class FileRelay
             return;
         }
 
-        _routes[sender.Id + ":" + fileId] = new Route { Recipients = recipients.ToArray() };
+        _routes[sender.Id + ":" + fileId] = new Route
+        {
+            Recipients = recipients.ToArray(),
+            TargetType = targetType,
+            Target = target,
+            Kind = Get(p, "kind"),
+            Size = Get(p, "size"),
+            Sha256 = Get(p, "sha256")
+        };
 
         // Chuyển tiếp, thêm "from" để người nhận biết ai gửi.
         var fwd = Clone(p);
@@ -168,7 +183,13 @@ public class FileRelay
                 ["from"] = _getUsername(sender),
                 ["fileId"] = result.FileId,
                 ["name"] = result.Name,
-                ["path"] = result.SavedPath ?? ""
+                ["path"] = result.SavedPath ?? "",
+                // Thêm thông tin đã chốt lúc FILE_START (để lưu vào bảng Messages)
+                ["targetType"] = route?.TargetType ?? "",
+                ["target"] = route?.Target ?? "",
+                ["kind"] = route?.Kind ?? "",
+                ["size"] = route?.Size ?? "",
+                ["sha256"] = route?.Sha256 ?? ""
             };
             FileSaved?.Invoke(sender, result, info);
         }

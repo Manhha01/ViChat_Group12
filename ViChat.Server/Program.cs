@@ -40,8 +40,23 @@ foreach (string roomName in ChatRepository.GetAllRoomNames())
 // Định dạng JSON cho gói HISTORY: tên trường kiểu camelCase (msgId, from, content, time)
 var historyJson = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 
-// Truyền file (FILE_START / FILE_CHUNK / FILE_END) – Thùy
-var fileRelay = FileRelay.CreateDefault("Uploads", clients);
+// Truyền file (FILE_START / FILE_CHUNK / FILE_END) – Thùy.
+// Bản thật: tên người gửi là tên đã đăng nhập; người nhận là thành viên phòng hoặc một người online.
+var fileRelay = new FileRelay(
+    "Uploads",
+    sender => NameOf(sender),
+    (sender, targetType, target) => FindFileRecipients(sender, targetType, target));
+
+// File gửi xong và đúng SHA-256 -> lưu thông tin file vào bảng Messages
+fileRelay.FileSaved += (sender, result, info) =>
+{
+    if (sender.UserId is not int senderId) return;
+    _ = Task.Run(async () =>
+    {
+        try { await ChatRepository.SaveFileMessageAsync(senderId, info); }
+        catch (Exception ex) { Console.WriteLine("  Không lưu được thông tin file: " + ex.Message); }
+    });
+};
 
 // ===================== NHẬN KẾT NỐI =====================
 // IPAddress.Any: nhận kết nối từ MỌI máy trong mạng
@@ -119,6 +134,7 @@ async Task ProcessPacketAsync(ClientSession s, Packet p)
         case "ROOM_LIST": await HandleRoomList(s); break;
         case PacketTypes.SendMsg: await HandleSendMsg(s, p); break;
         case "GET_HISTORY": await HandleGetHistory(s, p); break;
+        case "GET_PRIVATE_HISTORY": await HandleGetPrivateHistory(s, p); break;
 
         // --- Nhắn riêng 1-1, online, đang nhập, đã xem (Đạt) ---
         case "PRIVATE_MSG": await PrivateChat.HandlePrivateMsgAsync(s, p); break;
@@ -345,6 +361,44 @@ async Task HandleGetHistory(ClientSession s, Packet p)
             ["messages"] = JsonSerializer.Serialize(history, historyJson)
         }
     });
+}
+
+// GET_PRIVATE_HISTORY { with } -> PRIVATE_HISTORY { with, messages = "[...]" }
+async Task HandleGetPrivateHistory(ClientSession s, Packet p)
+{
+    string with = p.Data.GetValueOrDefault("with", "").Trim();
+    if (with.Length == 0)
+    {
+        await SendError(s, "BAD_REQUEST", "Thiếu 'with'");
+        return;
+    }
+
+    var history = await ChatRepository.GetPrivateHistoryAsync(s.UserId!.Value, with);
+    await s.SendAsync(new Packet
+    {
+        Type = "PRIVATE_HISTORY",
+        Data = new()
+        {
+            ["with"] = with,
+            ["messages"] = JsonSerializer.Serialize(history, historyJson)
+        }
+    });
+}
+
+// Ai nhận file: cả phòng (trừ người gửi) hoặc đúng một người đang online
+ClientSession[] FindFileRecipients(ClientSession sender, string targetType, string target)
+{
+    if (targetType == FileKinds.TargetRoom)
+    {
+        var room = rooms.Get(target);
+        if (room == null || !room.Members.ContainsKey(sender.Id)) return Array.Empty<ClientSession>();
+        return room.Members.Values.Where(m => m.Id != sender.Id).ToArray();
+    }
+
+    if (PrivateChat.OnlineUsers.TryGetValue(target, out var user) && user.Id != sender.Id)
+        return new[] { user };
+
+    return Array.Empty<ClientSession>();
 }
 
 // ===================== HÀM TIỆN ÍCH =====================
