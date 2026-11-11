@@ -333,13 +333,17 @@ public partial class ChatViewModel : ObservableObject
         string name = p.Data.GetValueOrDefault("name", "file");
         string kind = p.Data.GetValueOrDefault("kind", FileKinds.File);
         long.TryParse(p.Data.GetValueOrDefault("size", "0"), out long size);
-        // target = tên phòng. Bản tạm: server gửi file cho MỌI client.
-        string roomName = p.Data.GetValueOrDefault("target", "General");
+        string from = p.Data.GetValueOrDefault("from", "?");
+
+        // Chat riêng: hiện trong cuộc trò chuyện với NGƯỜI GỬI. Phòng: hiện trong phòng "target".
+        RoomItem chat = p.Data.GetValueOrDefault("targetType") == "user"
+            ? GetOrAddUser(from)
+            : GetOrAddRoom(p.Data.GetValueOrDefault("target", "General"));
 
         var msg = new ChatMessage
         {
-            Room = roomName,
-            From = p.Data.GetValueOrDefault("from", "?"),
+            Room = chat.Key,
+            From = from,
             Kind = kind == FileKinds.Image ? FileKinds.Image : FileKinds.File,
             FileId = fileId,
             FileName = name,
@@ -352,7 +356,7 @@ public partial class ChatViewModel : ObservableObject
 
         // Ghi vào từ điển TRƯỚC khi gọi HandleStart, vì nếu lỗi thì Completed được gọi ngay
         _fileMessages[fileId] = msg;
-        AddToRoom(GetOrAddRoom(roomName), msg);
+        AddToRoom(chat, msg);
         _receiver.HandleStart(p);
     }
 
@@ -419,12 +423,6 @@ public partial class ChatViewModel : ObservableObject
     {
         if (SelectedRoom is not { IsJoined: true } room) return;
 
-        // Server hiện chỉ chuyển file theo phòng
-        if (room.IsPrivate)
-        {
-            ShowNotice("Gửi file trong chat riêng sẽ có ở bản sau. Hãy gửi trong phòng.");
-            return;
-        }
 
         var dlg = new Microsoft.Win32.OpenFileDialog { Title = title, Filter = filter };
         if (dlg.ShowDialog() != true) return;
@@ -465,7 +463,8 @@ public partial class ChatViewModel : ObservableObject
         try
         {
             await Task.Run(() => FileSender.SendFileAsync(
-                path, FileKinds.TargetRoom, room.Name,
+                path, room.IsPrivate ? "user" : FileKinds.TargetRoom,   // chat riêng: target = username người nhận,
+                room.Name,
                 async pk =>
                 {
                     if (pk.Type == PacketTypes.FileStart)

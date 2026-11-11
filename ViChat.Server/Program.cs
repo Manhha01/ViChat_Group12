@@ -141,12 +141,12 @@ async Task ProcessPacketAsync(ClientSession s, Packet p)
         case "ONLINE_LIST": await PrivateChat.HandleOnlineListAsync(s); break;
         case "TYPING": await PrivateChat.HandleTypingAsync(s, p); break;
         case "SEEN": await PrivateChat.HandleSeenAsync(s, p); break;
-
-        // --- Truyền file (Thùy): giao hết cho FileRelay ---
+      
+        // --- Truyền file: chat riêng -> PrivateFileRelay, phòng -> FileRelay (Thùy) ---
         case PacketTypes.FileStart:
         case PacketTypes.FileChunk:
         case PacketTypes.FileEnd:
-            await fileRelay.HandleAsync(s, p);
+                await fileRelay.HandleAsync(s, p);
             break;
 
         default:

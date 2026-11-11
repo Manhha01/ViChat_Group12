@@ -21,6 +21,9 @@ public partial class ChatMessage : ObservableObject
     public bool IsMine { get; init; }     // tin của mình -> bong bóng tím bên phải
     public bool IsSystem { get; init; }   // "... đã vào phòng" -> chữ xám ở giữa
 
+    // Tin thuộc chat riêng (khóa bắt đầu bằng "@") -> không cần hiện tên người gửi
+    public bool IsPrivateChat => Room.StartsWith("@");
+
     public string Initials => AvatarHelper.Initials(From);
     public string AvatarColor => AvatarHelper.ColorFor(From);
 

@@ -58,12 +58,13 @@
 
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="5*"/>
-            <ColumnDefinition Width="6*"/>
+            <ColumnDefinition Width="455*"/>
+            <ColumnDefinition Width="533*"/>
+            <ColumnDefinition Width="12*"/>
         </Grid.ColumnDefinitions>
 
         <!-- ================= PANEL TRÁI (TÍM) ================= -->
-        <Border Grid.Column="0" Background="{StaticResource PrimaryBrush}" Padding="48,56">
+        <Border Grid.Column="0" Background="{StaticResource PrimaryBrush}" Padding="48,56" Grid.ColumnSpan="2" Margin="0,0,533,0">
             <DockPanel>
                 <!-- Logo -->
                 <StackPanel DockPanel.Dock="Top" Orientation="Horizontal">
@@ -102,7 +103,7 @@
         </Border>
 
         <!-- ================= FORM BÊN PHẢI ================= -->
-        <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+        <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Margin="0,2,0,-2" Grid.ColumnSpan="2">
             <StackPanel MaxWidth="420" Margin="32,40" VerticalAlignment="Center">
 
                 <TextBlock Text="{Binding FormTitle}" Style="{StaticResource HeadingText}"/>
@@ -140,7 +141,7 @@
 
                 <!-- Khung "Kết nối server" -->
                 <Border Background="White" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                        CornerRadius="16" Padding="16">
+                        CornerRadius="16" Padding="16" Height="148" Width="433">
                     <StackPanel>
                         <Grid Margin="0,0,0,10">
                             <TextBlock Text="Kết nối server" FontSize="14" FontWeight="SemiBold"
@@ -154,9 +155,9 @@
                         </Grid>
                         <Grid>
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="3*"/>
-                                <ColumnDefinition Width="10"/>
-                                <ColumnDefinition Width="1*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="110"/>
                             </Grid.ColumnDefinitions>
                             <StackPanel Grid.Column="0">
                                 <TextBlock Text="Địa chỉ IP server" FontSize="13"
@@ -168,7 +169,7 @@
                                 <TextBlock Text="Cổng" FontSize="13"
                                            Foreground="{StaticResource SubTextBrush}" Margin="0,0,0,6"/>
                                 <TextBox Style="{StaticResource ServerInput}"
-                                         Text="{Binding Port, UpdateSourceTrigger=PropertyChanged}"/>
+                                         Text="{Binding Port, UpdateSourceTrigger=PropertyChanged}" Width="108"/>
                             </StackPanel>
                         </Grid>
                     </StackPanel>
